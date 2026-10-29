@@ -71,9 +71,9 @@ overpass_api:
   max_tries: 5
   timeout: 600
   user_agent:
-    project_name: PyPSA-Eur
-    email: contact@pypsa.org
-    website: https://github.com/PyPSA/pypsa-eur
+    project_name: GeoffreyDeSena-GridResearch/1.0
+    email: geoffrey.desena@angstrom.uu.se
+    website: ""
 
 osm_network_release:
   release_version: "experimental"
