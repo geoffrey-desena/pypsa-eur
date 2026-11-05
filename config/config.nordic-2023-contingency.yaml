@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=./schema.default.json
+# Overlay: load AFTER config.nordic-2023-dcopf.yaml, not on its own.
+# Inherits the agreed fixed fleet, cyclic hydro, disabled batteries/emissions
+# constraints/pricing, and standard load-shedding formulation from that case.
+# Release the normal AC transmission margin for post-contingency dispatch.
+# HVDC limits and the transmission-loss approximation remain inherited defaults.
+# This file changes the AC loading allowance only; it does not select or remove
+# an outage component. The physical contingency remains to be specified.
+
+run:
+  name: nordic-2023-contingency
+
+lines:
+  s_max_pu: 1.0

@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=./schema.default.json
+# Nordic electricity-only operating case. Agreed assumptions, 2026-11-05.
+# Overrides config.default.yaml; unspecified settings retain repository defaults.
+# This configuration prepares NO/SE/FI/all-DK. It does NOT perform the final
+# DK2 extraction or disconnect external connections by itself.
+# Allocate national Danish demand across all Danish buses BEFORE removing DK1.
+# Final selection: NO1-NO5, SE1-SE4, FI, DK2 (DKE1 in bidding-zone shapes).
+# Retain internal Nordic HVDC links; disconnect links to excluded areas.
+# After building electricity_demand_simplified.nc, run the standalone
+# scripts/extract_nordic_network.py (from the parent project) to write
+# resources/nordic-2023-dcopf/nordic-isolated/{network.nc,electricity_demand.nc}
+# and preserve boundary_connections.csv for later external-transfer modelling.
+# This extraction is not yet a Snakemake rule; standard compose/solve targets
+# still use the all-Denmark workflow outputs until explicitly integrated.
+#
+# Before solving: integrate the isolated case into composition.
+# The grid dataset is not an exact historical
+# 2023 snapshot. Exclude project-list additions and branches flagged as under
+# construction (agreed 2026-11-05); unlabelled future infrastructure cannot be
+# identified from these settings alone.
+# Agreed grid checks: before/after component counts and country labels;
+# geometry presence/validity/CRS and bus/branch maps; connected components,
+# endpoints, self-loops/duplicates, electrical parameters and mapping coverage.
+# Generation counts are checked after plants are attached.
+# Hydro: retain the standard cyclic state of charge over January. This is set
+# by add_electricity.attach_hydro in this checkout, not a hydro YAML switch.
+# No observed initial contents; allow no net reservoir drawdown over January.
+
+run:
+  name: nordic-2023-dcopf
+  shared_resources:
+    policy: false
+
+foresight: overnight
+planning_horizons: [2023]
+
+sector:
+  enabled: false
+
+countries: ["NO", "SE", "FI", "DK"]
+
+snapshots:
+  start: "2023-01-01"
+  end: "2023-02-01"
+  inclusive: left
+
+electricity:
+  estimate_battery_capacities: false
+  # Approximate the fleet on 1 January 2023 using annual dates.
+  # Retain missing commissioning/retirement dates independently.
+  powerplants_filter: >-
+    (DateIn <= 2022 or DateIn != DateIn) and
+    (DateOut >= 2023 or DateOut != DateOut)
+  extendable_carriers:
+    Generator: []
+    StorageUnit: []
+    Store: []
+    Link: []
+  # A factor of 1 leaves existing AC/DC transmission capacities fixed.
+  transmission_limit: v1
+  estimate_renewable_capacities:
+    enable: true
+    from_powerplantmatching: true
+    from_irenastat: false
+
+costs:
+  year: 2025
+  emission_prices:
+    enable: false
+    dynamic: false
+    co2: 0.0
+
+co2_budget:
+  upper: null
+  lower: null
+
+transmission_projects:
+  enable: false
+
+lines:
+  under_construction: remove
+  # Normal operating case: retain the standard transmission margin.
+  s_max_pu: 0.7
+
+links:
+  under_construction: remove
+
+clustering:
+  build_bidding_zones:
+    aggregate_to_tyndp: false
+  simplify_network:
+    to_380: true
+    to_substations: false
+    remove_stubs: true
+    remove_stubs_across_borders: false
+  cluster_network:
+    n_clusters: all
+  temporal:
+    averaging: false
+    segmentation: false
+    representative: false
+
+data:
+  entsoe_electricity_demand:
+    source: archive
+    version: "2026-02-02"
+  powerplants:
+    source: archive
+    version: "0.8.1"
+  costs:
+    source: archive
+    version: v0.15.0
+  country_runoff:
+    source: archive
+    version: "2025-08-13"
+  cutout:
+    source: build
+    version: unknown
+
+atlite:
+  default_cutout: nordic-2023-era5
+  nprocesses: 1
+  cutouts:
+    nordic-2023-era5:
+      module: era5
+      x: [-5.0, 33.0]
+      y: [54.0, 72.0]
+      time:
+        - "2023-01-01 00:00"
+        - "2023-12-31 23:00"
+      chunks:
+        time: 24
+      prepare_kwargs:
+        features: [height, wind, influx, temperature, runoff]
+        monthly_requests: true
+        concurrent_requests: false
+        tmpdir: work/weather-download-2023
+
+solving:
+  options:
+    # Use the standard high-penalty formulation unchanged across runs.
+    # Artificial supply is not bounded by local demand; retain this agreed
+    # default for the initial comparison (not a strict service-first objective).
+    load_shedding:
+      enable: true
+      default_cost: 100000
+      all_carriers: true
+      carriers: {}
+  solver:
+    name: highs
+    options: highs-default
