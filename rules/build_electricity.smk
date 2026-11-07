@@ -391,6 +391,9 @@ rule build_renewable_profiles:
         availability_matrix=resources("availability_matrix_{technology}.nc"),
         offshore_shapes=resources("offshore_shapes.geojson"),
         distance_regions=resources("onshore_regions.geojson"),
+        # 2026-11-06: Codex, on behalf of Geoffrey DeSena. Supply bus country
+        # and coordinates for missing offshore distance-reference polygons.
+        network=resources("networks/clustered.nc"),
         resource_regions=lambda w: (
             resources("onshore_regions.geojson")
             if w.technology in ("onwind", "solar", "solar-hsat")

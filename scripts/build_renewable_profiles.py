@@ -62,6 +62,80 @@ from scripts._helpers import (
 logger = logging.getLogger(__name__)
 
 
+def offshore_distance_regions(regions, offshore_buses, network_path):
+    """Return distance-reference polygons, including auditable offshore fallbacks.
+
+    Added 2026-11-06 by Codex on behalf of Geoffrey DeSena to unblock Nordic
+    fixed-capacity DCOPF profile preparation. Missing offshore IDs reference
+    the nearest original same-country onshore polygon, using bus coordinates
+    in EPSG:3035. Only this in-memory distance lookup changes; shared land
+    allocations, offshore resource regions and electrical connections do not.
+    Retain the upstream polygon simplification. Report both distances because
+    simplification can remove nearby islands. Above 50 km warns but continues,
+    as requested; ambiguous or unavailable assignments remain errors.
+    """
+    original_crs = regions.crs
+    missing = pd.Index(offshore_buses).difference(regions.index)
+    assignments = []
+    if len(missing):
+        with xr.open_dataset(network_path) as network:
+            buses = pd.DataFrame(
+                {key: network[f"buses_{key}"].to_pandas()
+                 for key in ("country", "x", "y")}
+            )
+        required = regions.index.union(missing)
+        if not required.isin(buses.index).all():
+            raise ValueError("Distance-reference bus IDs are missing from the network")
+        if buses.loc[required, "country"].isna().any() or (
+            buses.loc[required, "country"] == ""
+        ).any():
+            raise ValueError("Distance-reference buses require country labels")
+        if not np.isfinite(buses.loc[missing, ["x", "y"]].to_numpy()).all():
+            raise ValueError("Offshore fallback buses require finite coordinates")
+        projected = regions.to_crs(3035)
+        # Search original polygons only; earlier fallback aliases are not candidates.
+        original = regions.copy()
+        regions = regions.copy()
+        for bus in missing:
+            country = buses.at[bus, "country"]
+            candidates = projected.loc[buses.loc[projected.index, "country"] == country]
+            if candidates.empty:
+                raise ValueError(f"No onshore distance-reference polygon for {bus} ({country})")
+            point = gpd.GeoSeries(
+                gpd.points_from_xy([buses.at[bus, "x"]], [buses.at[bus, "y"]]),
+                crs=4326,
+            ).to_crs(3035).iloc[0]
+            distances = candidates.distance(point)
+            if not np.isfinite(distances.to_numpy()).all():
+                raise ValueError(f"Invalid candidate distance-reference geometry for {bus}")
+            nearest = distances.index[
+                np.isclose(distances, distances.min(), rtol=0, atol=1e-6)
+            ]
+            if len(nearest) != 1:
+                raise ValueError(f"Ambiguous nearest distance-reference polygon for {bus}: {nearest.tolist()}")
+            source = nearest[0]
+            regions.loc[bus] = original.loc[source]
+            assignments.append((bus, country, source, point, distances.at[source] / 1000))
+
+    regions = regions.loc[offshore_buses].map(
+        lambda geometry: _simplify_polys(geometry, minarea=1)
+    ).set_crs(original_crs)
+    projected = regions.to_crs(3035)
+    for bus, country, source, point, original_km in assignments:
+        simplified_km = point.distance(projected.loc[bus]) / 1000
+        if not np.isfinite(simplified_km):
+            raise ValueError(f"Invalid simplified distance-reference geometry for {bus}")
+        log = logger.warning if max(original_km, simplified_km) > 50 else logger.info
+        log(
+            "Offshore distance fallback: bus=%s country=%s reference_polygon=%s "
+            "longitude=%.6f latitude=%.6f original_distance_km=%.3f "
+            "simplified_distance_km=%.3f exceeds_50_km=%s; assignment retained",
+            bus, country, source, buses.at[bus, "x"], buses.at[bus, "y"],
+            original_km, simplified_km, max(original_km, simplified_km) > 50,
+        )
+    return regions
+
+
 if __name__ == "__main__":
     if "snakemake" not in globals():
         from scripts._helpers import mock_snakemake
@@ -104,9 +178,8 @@ if __name__ == "__main__":
     if snakemake.wildcards.technology.startswith("offwind"):
         # for offshore regions, the shortest distance to the shoreline is used
         offshore_regions = availability.coords["bus"].values
-        regions = regions.loc[offshore_regions]
-        regions = regions.map(lambda g: _simplify_polys(g, minarea=1)).set_crs(
-            regions.crs
+        regions = offshore_distance_regions(
+            regions.geometry, offshore_regions, snakemake.input.network
         )
     else:
         # for onshore regions, the representative point of the region is used
